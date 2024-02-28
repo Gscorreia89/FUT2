@@ -1,0 +1,476 @@
+Pre---
+title: "FUT2 - Co-occurence network analysis"
+output: html_document
+author:
+  - Samit Kundu
+  - Gonçalo Correia
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+# Package and data import
+```{r}
+library(ggplot2)
+library(readxl)
+library(readr)
+library(dplyr)
+library(patchwork)
+library(banocc)
+library(igraph)
+library(qgraph)
+library(ggtext)
+library(ggraph)
+library(tidygraph)
+
+microbiome_Species <- readxl::read_excel('./Data//FUT2-Dataset.xlsx', sheet='Species Level Dataset')
+microbiome_ClinicalData <- readxl::read_excel('./Data//FUT2-Dataset.xlsx', sheet='Clinical Data')
+
+FUT2Dataset <- merge(microbiome_ClinicalData, microbiome_Species, by.x='SampleID', by.y="SampleID")
+
+colnames(FUT2Dataset)[colnames(FUT2Dataset) == 'Secretor Status'] <- "SecretorStatus"
+FUT2Dataset$bmi <- as.numeric(FUT2Dataset$bmi)
+FUT2Dataset$maternal.age <- as.numeric(FUT2Dataset$maternal.age)
+FUT2Dataset$ABO <- factor(FUT2Dataset$ABO, levels=c('A', 'AB', 'B', 'O'))
+FUT2Dataset$CST[grepl('IV', FUT2Dataset$CST)] <- 'IV'
+FUT2Dataset$CST <- factor(FUT2Dataset$CST, levels=c('I', 'II', 'III', 'IV', 'V'))
+FUT2Dataset$LactobacillusDominant <- factor(FUT2Dataset$LactobacillusDominant, levels=c('L. Dominant', 'L. Depleted'))
+FUT2Dataset$LactobacillusDominant_CST <- factor(FUT2Dataset$LactobacillusDominant_CST, levels=c('L. Dominant', 'L. Depleted'))
+```
+
+Create network for the FUT2 microbiome data using the Banocc package
+
+```{r}
+# Select Timepoint 1 samples only
+T1Samples <- subset(FUT2Dataset, Timepoint == 1)
+T1Samples <- subset(T1Samples, !SampleID %in% c('T1A22', 'T1PG2'))
+
+T1Samples_NSecretor <- subset(T1Samples, `SecretorStatus` == 'Non-secretor')
+T1Samples_Secretor <- subset(T1Samples, `SecretorStatus` == 'Secretor')
+
+# 37 is the first column with microbe counts
+T1_SecretorCounts <- T1Samples_Secretor[, 36:ncol(T1Samples_Secretor)]
+T1_NSecretorCounts <- T1Samples_NSecretor[, 36:ncol(T1Samples_NSecretor)]
+
+# Subset only bacteria which are present in both secretors and non-secretors
+presentBacteria <- names(which((colSums(T1_SecretorCounts > 0) > 2) & (colSums(T1_NSecretorCounts > 0) > 2)))
+T1_SecretorCounts <- T1_SecretorCounts[, presentBacteria]
+T1_NSecretorCounts <- T1_NSecretorCounts[, presentBacteria]
+
+T1_Secretor_RelMatrix <- T1_SecretorCounts / rowSums(T1_SecretorCounts)
+T1_Secretor_RelMatrix <- as.matrix(T1_Secretor_RelMatrix)
+T1_NSecretor_RelMatrix <- T1_NSecretorCounts / rowSums(T1_NSecretorCounts)
+T1_NSecretor_RelMatrix <- as.matrix(T1_NSecretor_RelMatrix)
+
+
+compiled_banocc_model <- rstan::stan_model(model_code = banocc::banocc_model)
+
+# Original iter = 10000
+secretor_fit <- banocc::run_banocc(C = T1_Secretor_RelMatrix, compiled_banocc_model=compiled_banocc_model, 
+                                   chains = 4, cores=4, verbose = T, iter = 1000, control = list(adapt_delta = 0.9))
+
+# rstan::traceplot(secretor_fit$Fit, pars=paste0("O[1,", 2:9, "]"), inc_warmup=T)
+secretor_out <- get_banocc_output(banoccfit = secretor_fit, conf_alpha = 0.05)
+secretor_res <- secretor_out$Estimates.median
+
+# Original iter = 10000
+nsecretor_fit <- banocc::run_banocc(C = T1_NSecretor_RelMatrix, compiled_banocc_model=compiled_banocc_model, chains = 4, cores=4, verbose = T, iter = 1000, control = list(adapt_delta = 0.9))
+# rstan::traceplot(nsecretor_fit$Fit, pars=paste0("O[1,", 2:9, "]"), inc_warmup=T)
+nsecretor_out <- get_banocc_output(banoccfit = nsecretor_fit, conf_alpha = 0.05)
+nsecretor_res <- nsecretor_out$Estimates.median
+```
+# Save/Load pre-calculated results
+```{r}
+#write.csv(nsecretor_res, file = "10K_NSecretor.csv")
+#write.csv(secretor_res, file = "10K_Secretor.csv")
+
+#saveRDS(secretor_fit, 'secretor_10K.R')
+#saveRDS(nsecretor_fit, 'nsecretor_10K.R')
+
+# secretor_res <- read_csv('./200K_Secretor.csv')
+# nsecretor_res <- read_csv('./200K_NSecretor.csv')
+
+secretor_res <- read.csv('./200K_Secretor.csv', header=T, row.names = 1)
+secretor_res <- as.matrix(secretor_res)
+colnames(secretor_res) <- rownames(secretor_res)
+
+nsecretor_res <- read.csv('./200K_NSecretor.csv', header=T, row.names = 1)
+nsecretor_res <- as.matrix(nsecretor_res)
+colnames(nsecretor_res) <- rownames(nsecretor_res)
+
+# secretor_fit <- readRDS('./secretor_200K.R')
+# nsecretor_fit <- readRDS('./nsecretor_200K.R')
+
+# nsecretor_out <- get_banocc_output(banoccfit = nsecretor_fit, conf_alpha = 0.05)
+# nsecretor_res <- nsecretor_out$Estimates.median
+
+# secretor_out <- get_banocc_output(banoccfit = secretor_fit, conf_alpha = 0.05)
+# secretor_res <- secretor_out$Estimates.median
+```
+
+# Setup color labels
+```{r}
+labelList_Secretor <- list(`L. crispatus`=which(colnames(secretor_res) == 'L. crispatus'), 
+     `L. iners`=which(colnames(secretor_res) == 'L. iners'),
+     `L. gasseri`=which(colnames(secretor_res) == 'L. gasseri'), 
+     `L. jensenii`=which(colnames(secretor_res) == 'L. jensenii'),
+      `G. vaginalis`=which(colnames(secretor_res) == 'G. vaginalis'),
+     Lactobacillus=which(colnames(secretor_res) %in% c('L. vaginalis', 'L. coleohominis', 'Lactobacillus')),
+     BV=which(colnames(secretor_res) %in% c('Anaerococcus', 'A. vaginae', 'P. bivia', 'P. corporis', 'P. anaerobius', 'P. colorans', 'P. disiens', 'S. amnii', 'Megasphaera', 'P. buccalis', 'P. timonensis', 'P. uenonis', 'A. christensenii', 'Peptoniphilus', 'A. schaalii', 'V. cambriense', 'F. massiliensis', "D. micraerophilus", "D. propionicifaciens", "Dialister", "V. montpellierensis", 
+      "A. hydrogenalis", "A. lactolyticus",  "Anaerococcus",  'F. magna', "P. coxii", "P. indolicus", "P. lacrimalis", "Peptoniphilus", 'U. parvum', 'F. nucleatum')),
+     Pathobiont=which(colnames(secretor_res) %in% c('S. agalactiae', 'S. anginosus')),
+     `B. breve`=which(colnames(secretor_res) %in% c('B. breve')))
+
+labelList_NSecretor <- list(`L. crispatus`=which(colnames(nsecretor_res) == 'L. crispatus'), 
+     `L. iners`=which(colnames(nsecretor_res) == 'L. iners'),
+     `L. gasseri`=which(colnames(nsecretor_res) == 'L. gasseri'), 
+     `L. jensenii`=which(colnames(nsecretor_res) == 'L. jensenii'),
+     `G. vaginalis`=which(colnames(nsecretor_res) == 'G. vaginalis'),
+     Lactobacillus=which(colnames(nsecretor_res) %in% c('L. vaginalis', 'L. coleohominis', 'Lactobacillus')),
+     BV=which(colnames(nsecretor_res) %in% c('Anaerococcus', 'A. vaginae', 'P. bivia', 'P. corporis', 'P. anaerobius', 'P. colorans', 'P. disiens', 'S. amnii', 'Megasphaera', 'P. buccalis', 'P. timonensis', 'P. uenonis', 'A. christensenii', 'Peptoniphilus', 'A. schaalii', 'V. cambriense', 'F. massiliensis', "D. micraerophilus", "D. propionicifaciens", "Dialister", "V. montpellierensis", 
+      "A. hydrogenalis", "A. lactolyticus",  "Anaerococcus",  'F. magna', "P. coxii", "P. indolicus", "P. lacrimalis", "Peptoniphilus", 'U. parvum', 'F. nucleatum')),
+     Pathobiont=which(colnames(nsecretor_res) %in% c('S. agalactiae', 'S. anginosus')),
+     `B. breve`=which(colnames(nsecretor_res) %in% c('B. breve')))
+
+# Similar structure but for ggraph
+nodeColorsCustom <- c()
+for (x in names(labelList_Secretor)) {
+  for (y in labelList_Secretor[[x]]) {
+    nodeColorsCustom <- rbind(nodeColorsCustom, c(y, x))
+  }
+}
+
+nodeColorsCustom <- data.frame(nodeColorsCustom)
+colnames(nodeColorsCustom) <- c('label', 'Type')
+nodeColorsCustom$label <- as.numeric(nodeColorsCustom$label)
+nodeColorsCustom$Type <- factor(nodeColorsCustom$Type, levels=c('L. crispatus', 'L. gasseri', 'L. iners', 'L. jensenii', 'G. vaginalis', 'Lactobacillus', 'BV', 'Pathobiont', 'Other'))
+```
+
+## Use qgraph and igraph for plotting and network statistics
+```{r}
+# qgraph::qgraph(as.matrix(secretor_res), layout="spring", vsize=2, border.width=1, groups=labelList_Secretor, color=c("#4daf4a","#ff7f00", "#377eb8","#ffff33","#a65628", "#984ea3", "#e41a1c", "#666666"),labels=F)
+
+#qgraph::qgraph(nsecretor_res, layout="spring", vsize=2, border.width=1, groups=labelList_NSecretor, color=c("#4daf4a","#ff7f00", "#377eb8","#ffff33","#a65628", "#984ea3", "#e41a1c", "#666666"),labels=F)
+
+# centralityPlot(secretor_res, include = c("Strength", "ExpectedInfluence","Closeness"), orderBy = "ExpectedInfluence")
+# centralityPlot(nsecretor_res, include = c("Strength", "ExpectedInfluence","Closeness"), orderBy = "ExpectedInfluence")
+
+nsec_cent <- centrality_auto(nsecretor_res)
+nsec_cent_df <- as.data.frame(nsec_cent$node.centrality)
+sec_cent <- centrality_auto(secretor_res)
+sec_cent_df <- as.data.frame(sec_cent$node.centrality)
+sec_cent_df$Taxon <- row.names(sec_cent_df)
+nsec_cent_df$Taxon <- row.names(nsec_cent_df)
+
+# ggplot() + geom_histogram(data=sec_cent_df, aes(x=ExpectedInfluence), fill="cyan", alpha=0.3) + geom_histogram(data=nsec_cent_df, aes(x=ExpectedInfluence), fill="red", alpha=0.3) + scale_fill_discrete() + theme_light() + scale_x_continuous(name="Expected Influence")
+
+secretor_EIPlot <- ggplot(data=sec_cent_df, aes(x=Taxon, y=ExpectedInfluence)) + geom_bar(stat='identity', fill="cyan", alpha=0.5)  + theme_light() + scale_y_continuous(name="Expected Influence") + coord_flip() + xlab(NULL) + theme(axis.text.y = element_blank())
+
+nonsecretor_EIPlot <- ggplot(data=nsec_cent_df, aes(x=Taxon, y=ExpectedInfluence)) + geom_bar(stat='identity', fill="red", alpha=0.5)  + theme_light() + scale_y_continuous(name="Expected Influence") + coord_flip() + theme(axis.text.y=element_text(face=c("italic")))
+
+EIPanel <- (nonsecretor_EIPlot | secretor_EIPlot)
+
+ggsave(here::here('Figures', 'FigureS2.png'), EIPanel, dpi=300, width=10, height=8)
+ggsave(here::here('Figures', 'FigureS2.svg'), EIPanel, dpi=300, width=10, height=8)
+
+
+sec_qgrp <- qgraph::qgraph(secretor_res, layout="spring", vsize=4, border.width=1, groups=labelList_Secretor, color=c("#4daf4a","#ff7f00", "#377eb8","#ffff33","#2134ca", "#a65628", "#984ea3", "#e41a1c", "#666666"),labels=T)
+nsec_qgrp <- qgraph::qgraph(nsecretor_res, layout="spring", vsize=4, border.width=1, groups=labelList_NSecretor, color=c("#4daf4a","#ff7f00", "#377eb8","#ffff33","#2134ca", "#a65628", "#984ea3", "#e41a1c", "#666666"), labels=T)
+```
+
+# Non-secretor network plot
+```{r}
+CustomColorsValues=c("L. crispatus"="#4daf4a", "L. iners"="#ff7f00", "L. gasseri"="#377eb8", "G. vaginalis"="deeppink", 
+                     "L. jensenii"="#ffff33", "tomato3", "Lactobacillus"="#a65628", "BV"="#984ea3", "Pathobiont"="#e41a1c", "B. breve"="#666666")
+
+# plot using ggraph
+graph_tbl_nsec <- nsec_qgrp %>% 
+  as_tbl_graph() %>% 
+  activate(nodes) %>% left_join(nodeColorsCustom, by = join_by(label == label))
+
+# use the default laytouts from igraph
+layout_nsec <- create_layout(graph_tbl_nsec, layout = 'manual', x=nsec_qgrp$layout[, 1], y=nsec_qgrp$layout[,2 ])
+
+# layout <- create_layout(graph_tbl, layout = 'igraph', algorithm='star', center=9)
+networkNonSecretor <- ggraph(layout_nsec) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +  geom_node_circle(aes(fill = Type, r=0.075),  show.legend = T, color='black') + scale_fill_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white", high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif"))
+
+```
+
+# Secretor network plot
+```{r}
+CustomColorsValues=c("L. crispatus"="#4daf4a", "L. iners"="#ff7f00", "L. gasseri"="#377eb8",
+                     "L. jensenii"="#ffff33", "G. vaginalis"="deeppink", "Lactobacillus"="#a65628", "BV"="#984ea3", "Pathobiont"="#e41a1c", "Other"="#666666")
+
+# plot using ggraph
+graph_tbl_sec <- sec_qgrp %>% 
+  as_tbl_graph() %>% 
+  activate(nodes) %>% left_join(nodeColorsCustom, by = join_by(label == label))
+
+# use the default laytouts from igraph
+layout_sec <- create_layout(graph_tbl_sec, layout = 'manual', x=sec_qgrp$layout[, 1], y=sec_qgrp$layout[,2 ])
+
+# layout <- create_layout(graph_tbl, layout = 'igraph', algorithm='star', center=9)
+networkSecretor <- ggraph(layout_sec) +
+   geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +  geom_node_circle(aes(fill = Type, r=0.075),  show.legend = T, color='black') + scale_fill_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white", high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif"))
+
+networkPanel <- (networkSecretor | networkNonSecretor ) + plot_layout(guides = 'collect') & theme(plot.margin =  unit(c(0,0,0,0), 'cm'))
+networkPanel <- networkPanel & theme(plot.tag = element_text(size=35))
+
+ggsave(here::here('Figures', 'Figure2_TopNetworks.png'), dpi=300, width=12, height=6)
+```
+
+##Flow diagrams
+These re-center the network on specific nodes and are useful for highlighting the distribution of edges.
+```{r}
+par(mfrow=c(2,1))
+#flow diagrams for L.crispatus
+bugIdx <- which(colnames(secretor_res) == 'L. crispatus')
+flow(sec_qgrp, bugIdx, vsize=3)
+flow(nsec_qgrp, bugIdx, vsize=3)
+#flow diagram for L.gasseri
+bugIdx <- which(colnames(secretor_res) == 'L. gasseri')
+flow(sec_qgrp, bugIdx, vsize=3)
+flow(nsec_qgrp, bugIdx, vsize=3)
+#flow diagram for L.iners
+bugIdx <- which(colnames(secretor_res) == 'L. iners')
+flow(sec_qgrp, bugIdx, vsize=3)
+flow(nsec_qgrp, bugIdx, vsize=3)
+#flow diagram for L.jensenii
+bugIdx <- which(colnames(secretor_res) == 'L. jensenii')
+flow(sec_qgrp, bugIdx, vsize=3)
+flow(nsec_qgrp, bugIdx, vsize=3)
+#flow diagram for G. vaginalis
+bugIdx <- which(colnames(secretor_res) == 'G. vaginalis')
+flow(sec_qgrp, bugIdx, vsize=3)
+flow(nsec_qgrp, bugIdx, vsize=3)
+```
+
+
+# Pairwise star plots
+# L. crispatus
+```{r}
+bugIdx <- which(colnames(secretor_res) == 'L. crispatus')
+
+# use the default laytouts from igraph
+secSubGraph_LCrisp <- graph_tbl_sec %>% activate(edges) %>% filter(from== bugIdx | to == bugIdx)
+
+layout_sec_crisp <- create_layout(secSubGraph_LCrisp, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starSec_LCrisp <- ggraph(layout_sec_crisp) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif"))  +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+nsecSubGraph_LCrisp <- graph_tbl_nsec %>% activate(edges) %>% filter(from==bugIdx | to == bugIdx)
+layout_Nsec_crisp <- create_layout(nsecSubGraph_LCrisp, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starNSec_LCrisp <- ggraph(layout_Nsec_crisp) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif")) +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+starDiagram_Lcrisp <- (starSec_LCrisp | starNSec_LCrisp) # +  plot_layout(guides = 'collect')
+```
+
+# L. iners
+```{r}
+bugIdx <- which(colnames(secretor_res) == 'L. iners')
+
+# use the default laytouts from igraph
+secSubGraph_Liners <- graph_tbl_sec %>% activate(edges) %>% filter(from == bugIdx | to == bugIdx)
+
+layout_sec_liners <- create_layout(secSubGraph_Liners, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starSec_Liners <- ggraph(layout_sec_liners) +
+ geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif"))  +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+nsecSubGraph_Liners <- graph_tbl_nsec %>% activate(edges) %>% filter(from==bugIdx | to == bugIdx)
+layout_Nsec_liners <- create_layout(nsecSubGraph_Liners, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starNSec_Liners <- ggraph(layout_Nsec_liners) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif")) +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+starDiagram_Liners <- (starSec_Liners | starNSec_Liners) # +  plot_layout(guides = 'collect')
+```
+
+# L. gasseri
+```{r}
+bugIdx <- which(colnames(secretor_res) == 'L. gasseri')
+
+# use the default laytouts from igraph
+secSubGraph_Lgasseri <- graph_tbl_sec %>% activate(edges) %>% filter(from == bugIdx | to == bugIdx)
+
+layout_sec_lgasseri <- create_layout(secSubGraph_Lgasseri, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starSec_Lgasseri <- ggraph(layout_sec_lgasseri) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif"))  +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+nsecSubGraph_Lgasseri <- graph_tbl_nsec %>% activate(edges) %>% filter(from == bugIdx | to == bugIdx)
+layout_Nsec_lgasseri <- create_layout(nsecSubGraph_Lgasseri, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starNSec_Lgasseri <- ggraph(layout_Nsec_lgasseri) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif")) +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+starDiagram_Lgasseri <- (starSec_Lgasseri | starNSec_Lgasseri)#  +  plot_layout(guides = 'collect')
+```
+
+# L. jensenii
+```{r}
+bugIdx <- which(colnames(secretor_res) == 'L. jensenii')
+
+# use the default laytouts from igraph
+secSubGraph_Ljenseni <- graph_tbl_sec %>% activate(edges) %>% filter(from == bugIdx | to == bugIdx)
+
+layout_sec_ljenseni <- create_layout(secSubGraph_Ljenseni, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starSec_Ljenseni <- ggraph(layout_sec_ljenseni) +
+ geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif"))  +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+nsecSubGraph_Ljenseni <- graph_tbl_nsec %>% activate(edges) %>% filter(from==bugIdx | to == bugIdx)
+layout_Nsec_ljenseni <- create_layout(nsecSubGraph_Ljenseni, layout = 'igraph', algorithm='star', center=bugIdx)
+
+starNSec_Ljenseni <- ggraph(layout_Nsec_ljenseni) +
+ geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif")) +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+starDiagram_Ljenseni <- (starSec_Ljenseni | starNSec_Ljenseni) # +  plot_layout(guides = 'collect')
+```
+
+# G. vaginalis
+```{r}
+# use the default laytouts from igraph
+bugIdx <- which(colnames(secretor_res) == 'G. vaginalis')
+
+secSubGraph_Gvaginalis <- graph_tbl_sec %>% activate(edges) %>% filter(from == bugIdx | to == bugIdx)
+
+layout_sec_gvaginalis <- create_layout(secSubGraph_Gvaginalis, layout = 'igraph', algorithm='star', center= bugIdx)
+
+starSec_Gvaginalis <- ggraph(layout_sec_gvaginalis) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50",guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif"))  +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+nsecSubGraph_Gvaginalis <- graph_tbl_nsec %>% activate(edges) %>% filter(from == bugIdx | to == bugIdx)
+layout_Nsec_gvaginalis <- create_layout(nsecSubGraph_Gvaginalis, layout = 'igraph', algorithm='star', center = bugIdx)
+
+starNSec_Gvaginalis <- ggraph(layout_Nsec_gvaginalis) +
+  geom_edge_fan(
+    aes(color = weight, edge_linewidth=abs(weight)),
+    show.legend = F
+  ) +
+  geom_node_point(
+    aes(color = Type), size = 10,
+    show.legend = T
+  ) + scale_color_manual(values=CustomColorsValues)  + scale_edge_colour_gradient2(low = "firebrick3",
+  mid = "white",high = "darkgreen", midpoint = 0,  space = "Lab", na.value = "grey50", guide = "edge_colourbar",
+  aesthetics = "edge_colour") +  theme_graph() + scale_edge_width(range = c(0, 2), guide = "none") + theme(legend.text = element_text(size = 10,  family="sans-serif"), legend.title=element_text(size=12,  family="sans-serif")) +  theme(plot.margin = margin(0, 0, 0, 0, "pt"))
+
+starDiagram_Gvaginalis <- (starSec_Gvaginalis | starNSec_Gvaginalis) #+  plot_layout(guides = 'collect')
+```
+
+```{r}
+starDiagramFigures <- (starDiagram_Lcrisp / starDiagram_Liners /   starDiagram_Gvaginalis) 
+
+# starDiagramFigures <- (starDiagram_Lcrisp / starDiagram_Liners / starDiagram_Lgasseri / starDiagram_Ljenseni / starDiagram_Gvaginalis) 
+
+starDiagramFigures <- starDiagramFigures + plot_layout(guide='collect')
+
+# starDiagramFigures <- starDiagramFigures + plot_annotation(tag_levels = list(c('A', '', 'B', '', 'C', '', 'D', '', 'E')))
+
+starDiagramFigures <- starDiagramFigures
+networkFigure <- (networkPanel / starDiagramFigures)
+networkFigure <- networkFigure + plot_layout(heights = c(1, 2)) 
+
+networkFigure <- networkFigure + plot_annotation(tag_levels = list(c('A', '', 'B', '', 'C', '', 'D', '')))
+networkFigure <- networkFigure & theme(plot.tag = element_text(size=35))
+
+ggsave(here::here('Figures', 'Fig2_NetworkPanel.png'), networkFigure, dpi=300, height=20, width=14)
+ggsave(here::here('Figures', 'Fig2_NetworkPanel.svg'), networkFigure, dpi=300, height=20, width=14)
+```

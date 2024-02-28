@@ -1,0 +1,490 @@
+---
+title: "FUT2 - Regression modelling analysis"
+output: html_document
+author:
+  - Samit Kundu
+  - Gonçalo Correia
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Parallel cross-sectional modelling
+
+Modelling (GLMM) of the secretor data/vaginal microbiome data across three timepoints in pregnancy.
+
+### 1.Modelling with Lactobacillus status at Timepoint 1 ("early" pregnancy)
+
+Perform standard dummy coding regression using the GlmmTMB library to fit a random intercept model (ethnicity coded as a four level categorical variable [CSAsia, European, Afro-Caribbean and Other]) regressing gestational age (days) on the following covariates with a gamma distribution:
+
+Maternal age (maternal.age)
+BMI (bmi)
+Previous Preterm birth or mid-trimester loss (fpbd):
+  - no previous PTB or MTL
+  - Previous PTB or MTL
+Cervical cerclage (cerclage):
+  - no cerclage
+  - cerclage
+Previous Lletz treatment(lletz):
+  - no previous Lletz
+  - previous Lletz treatment
+Ethnicity (ethnicity):
+  - White
+  - Black
+  - Asian
+  - Arab
+  - Mixed
+  - Other
+Secretor status (SecretorStatus):
+  - Secretor
+  - Non-secretor
+Lactobacillus status (LactobacillusDominant in early, mid and late pregnancy):
+  - L. Dominant - Lactobacillus dominated
+  - L. Deplete - Lactobacillus depleted
+CST (CST in early, mid and late pregnancy):
+  - CST I
+  - CST II
+  - CST III
+  - CST IV
+  - CST V
+
+ABO group:
+  0 - A
+  1 - AB
+  2 - B
+  3 - O
+
+We apply a reflection transformation to the gestational age variable to use a gamma distribution ("lgest" variable).
+
+Note
+1. Lactobacillus status is defined using the VALENCIA classification algorithm output (L. Depleted = CST IV, L. Dominant = CST I, II, III, V)
+2. Our previous analyses (not shown here) indicate only moderate evidence of multicollinearity (VIF values are all low, <10) between some variables (Previous PTB/MTL and previous Lletz).
+
+# Package and data import
+```{r}
+library(glmmTMB)
+library(car)
+library(emmeans)
+library(DHARMa)
+library(readxl)
+library(ggplot2)
+library(readxl)
+library(dplyr)
+library(zCompositions)
+require(magrittr)
+library(ggtext)
+library(gt)
+library(gtsummary)
+library(patchwork)
+
+
+FUT2Dataset <- readxl::read_excel('./Data//FUT2-Dataset.xlsx', sheet='Clinical Data')
+
+colnames(FUT2Dataset)[colnames(FUT2Dataset) == 'Secretor Status'] <- "SecretorStatus"
+FUT2Dataset$bmi <- as.numeric(FUT2Dataset$bmi)
+FUT2Dataset$maternal.age <- as.numeric(FUT2Dataset$maternal.age)
+FUT2Dataset$ABO <- factor(FUT2Dataset$ABO, levels=c('A', 'AB', 'B', 'O'))
+FUT2Dataset$CST[grepl('IV', FUT2Dataset$CST)] <- 'IV'
+FUT2Dataset$CST <- factor(FUT2Dataset$CST, levels=c('I', 'II', 'III', 'IV', 'V'))
+FUT2Dataset$LactobacillusDominant <- factor(FUT2Dataset$LactobacillusDominant, levels=c('L. Dominant', 'L. Depleted'))
+FUT2Dataset$LactobacillusDominant_CST <- factor(FUT2Dataset$LactobacillusDominant_CST, levels=c('L. Dominant', 'L. Depleted'))
+```
+
+# Descriptive Statistics
+## Figure 3 - Distribution of gestational length in days with secretor status and microbial composition
+```{r}
+CustomColours <- c('I'='forestgreen', 'II'='steelblue3', 'III'='darkorange3', 'IV'='firebrick3', 'V'='turquoise4')
+
+SecretorGestAge_1_CST <- ggplot(subset(FUT2Dataset, Timepoint == 1), aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=14), axis.title.y=element_text(size=14)) + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab('Gestational length (days)') + ylim(c(140, 294)) 
+
+
+SecretorGestAge_2_CST <- ggplot(subset(FUT2Dataset, Timepoint == 2), aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14))  + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL) + ylim(c(140, 294))
+
+SecretorGestAge_3_CST <- ggplot(subset(FUT2Dataset, Timepoint == 3), aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=14), axis.title.y=element_text(size=14))  + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL) + ylim(c(140, 294)) + ylab(NULL) 
+
+CustomColours_LDom <- c('L. Dominant'='forestgreen', 'L. Depleted'='firebrick3')
+
+SecretorGestAge_1_LDom <- ggplot(subset(FUT2Dataset, Timepoint == 1), aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14))   + theme(axis.text.x = element_text(angle = 0,  size = 14)) + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab('Gestational length (days)') + guides(fill=guide_legend(title="*Lactobacillus* status"))   +
+  theme(legend.title = element_markdown()) + ylim(c(140, 294))
+
+SecretorGestAge_2_LDom <- ggplot(subset(FUT2Dataset, Timepoint == 2), aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14)) + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL)  + guides(fill=guide_legend(title="*Lactobacillus* status"))   +  
+  theme(legend.title = element_markdown()) + ylim(c(140, 294))
+
+SecretorGestAge_3_LDom <- ggplot(subset(FUT2Dataset, Timepoint == 3), aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14))  + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL)  + guides(fill=guide_legend(title="*Lactobacillus* status"))   + 
+  theme(legend.title = element_markdown()) + ylim(c(140, 294))
+
+Figure3_LD <- (SecretorGestAge_1_LDom | SecretorGestAge_2_LDom | SecretorGestAge_3_LDom)
+Figure3_CST <- (SecretorGestAge_1_CST | SecretorGestAge_2_CST | SecretorGestAge_3_CST)
+
+Figure3_CST <- Figure3_CST + plot_layout(guides='collect')
+Figure3_LD <- Figure3_LD + plot_layout(guides='collect') 
+
+Figure3 <- (Figure3_LD / Figure3_CST)  & theme(legend.justification = "left")
+Figure3 <- Figure3  + plot_annotation(tag_levels=list(c('A', '', '', 'B', '', ''))) 
+Figue3 <- Figure3 & theme(plot.tag = element_text(size=25))
+
+ggsave(here::here('Figures', 'Figure3.png'), dpi=300, width=12, height=10)
+ggsave(here::here('Figures', 'Figure3.svg'), dpi=300, width=12, height=10)
+
+```
+
+## Table S1 
+```{r}
+MetadataFrame_PerPregnancy <- subset(FUT2Dataset, !duplicated(SubjectID))
+MetadataFrame_PerPregnancy$BMICat <- cut(MetadataFrame_PerPregnancy$bmi, 
+                   breaks=c(-Inf, 18.5, 24.99, 29.99, Inf), 
+                   labels=c("<18.5","18.5 - 24.99","25-29.99", ">30"))
+MetadataFrame_PerPregnancy$cerclage <- factor(MetadataFrame_PerPregnancy$cerclage)
+MetadataFrame_PerPregnancy$lletz <- factor(MetadataFrame_PerPregnancy$lletz)
+
+MetadataFrame_PerPregnancy$Outcome <- MetadataFrame_PerPregnancy$delivery.gestation_total.days < 259
+
+MetadataFrame_Summary <- MetadataFrame_PerPregnancy %>% dplyr::select(delivery.gestation_total.days, Outcome, maternal.age, SecretorStatus, BMICat, ethnicity.simplified, lletz, cerclage, previous.ptb)
+
+MetadataFrame_Summary$ethnicity.simplified[MetadataFrame_Summary$ethnicity.simplified == 'Mixed black/white'] <- 'Mixed/Other'
+MetadataFrame_Summary$ethnicity.simplified[MetadataFrame_Summary$ethnicity.simplified == 'Mixed'] <- 'Mixed/Other'
+MetadataFrame_Summary$ethnicity.simplified[MetadataFrame_Summary$ethnicity.simplified == 'Other'] <- 'Mixed/Other'
+
+# colnames(MetadataFrame_Summary) <- c('Secretor Status', 'Lactobacillus Dominant', 'CST')
+
+summaryTable_S1 <- tbl_summary(MetadataFrame_Summary, by=c(`SecretorStatus`), statistic = all_continuous() ~ "{mean} ({sd})") 
+# %>% modify_header(label = '**Outcome**') %>% add_p(pvalue_fun = function(x) style_pvalue(x, digits = 3))
+
+t1_summary <- summary(subset(FUT2Dataset, Timepoint == 1)[, "sampling.gestation_total.days"])
+t2_summary <- summary(subset(FUT2Dataset, Timepoint == 2)[, "sampling.gestation_total.days"])
+t3_summary <- summary(subset(FUT2Dataset, Timepoint == 3)[, "sampling.gestation_total.days"])
+```
+
+## Genotype statistics
+```{r}
+genotypes <- MetadataFrame_PerPregnancy[, c('SubjectID', 'SecretorStatus', 'ethnicity.simplified', 'I129F', 'P101L', 'R191X', 'W143X')]
+
+# heterozygous (secretor or not)
+heterozygous <- genotypes %>% filter(I129F == 'F|I' | P101L == 'L|P' | R191X %in% c("X|R", "R|Q") | W143X == 'W|X')
+# non-secretor homozygous genotypes
+nonSecretorhomozygous <-  genotypes %>% filter(I129F == 'F|F' | P101L == 'L|L' | W143X == 'X|X')
+
+# Proportion of 'X|X' se428 in non-secretor homozygous 
+sum(nonSecretorhomozygous$W143X =='X|X')/nrow(nonSecretorhomozygous) * 100
+
+# Proportion of se428 heterozygous
+sum(heterozygous$W143X =='W|X')/nrow(heterozygous) * 100
+# Ethnic breakdown of genotypes
+table(genotypes$I129F, genotypes$ethnicity.simplified)
+table(genotypes$P101L, genotypes$ethnicity.simplified)
+table(genotypes$W143X, genotypes$ethnicity.simplified)
+
+```
+
+
+## Info used for table S2
+```{r}
+countsT1 <- subset(FUT2Dataset, Timepoint == 1) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, LactobacillusDominant) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', n(), ')')) %>% gt()
+
+countsT2 <- subset(FUT2Dataset, Timepoint == 2) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, LactobacillusDominant) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', n(), ')')) %>% gt()
+
+countsT3 <- subset(FUT2Dataset, Timepoint == 3) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, LactobacillusDominant) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', n(), ')')) %>% gt()
+
+countsT1_CST <- subset(FUT2Dataset, Timepoint == 1) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, CST) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', n(), ')')) %>% gt()
+
+countsT2_CST <- subset(FUT2Dataset, Timepoint == 2) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, CST) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', n(), ')')) %>% gt()
+
+countsT3_CST <- subset(FUT2Dataset, Timepoint == 3) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, CST) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', n(), ')')) %>% gt()
+```
+
+# Regression Analysis
+## Early (TP1) Analysis
+```{r}
+FUT2_TP1 <- subset(FUT2Dataset, Timepoint == 1)
+
+# reflectorTransformation 
+# FUT2_TP1$LGest <- FUT2_TP1$delivery.gestation_total.days
+FUT2_TP1$LGest <- (max(FUT2_TP1$delivery.gestation_total.days) + 1 ) - FUT2_TP1$`delivery.gestation_total.days`
+FUT2_TP1 <- subset(FUT2_TP1, previous.ptb != 'NA')
+FUT2_TP1$previous.ptb <- factor(FUT2_TP1$previous.ptb)
+# Re-level factor to have non-secretor on model coefs by default
+FUT2_TP1$SecretorStatus <- factor(FUT2_TP1$SecretorStatus, levels=c('Secretor', 'Non-secretor'))
+
+#Run GLMM incoroporating Lactobacillus status at Timepoint 1 and secretor status - Original Model
+# glmm_t1 <- glmmTMB(lgest~Age+fbmi+fpbd+fstitch+floop+fsec+ft1ld+fsec:ft1ld+(1|feth), family=Gamma(link="log"), data=FUT2_TP1)
+
+glmm_t1 <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP1)
+
+#Model diagnostics
+simglmmT1 <- simulateResiduals(fittedModel=glmm_t1, plot=T)
+testDispersion(simglmmT1)
+
+#Perform analysis of deviance using the Anova (using Anova from the car package rather than the core anova function as the former automatically takes care of unbalanced designs)
+Anova(glmm_t1)
+summary(glmm_t1)
+
+# Model using CST instead of LDepleted status
+glmm_t1_CST <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz + SecretorStatus + CST + SecretorStatus:CST + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP1)
+
+#Model diagnostics
+simglmmT1 <- simulateResiduals(fittedModel=glmm_t1_CST, plot=T)
+testDispersion(simglmmT1)
+
+#Perform analysis of deviance using the Anova (using Anova from the car package rather than the core anova function as the former automatically takes care of unbalanced designs)
+Anova(glmm_t1_CST)
+summary(glmm_t1_CST)
+
+results_table_t1 <-
+  Anova(glmm_t1) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'Lactobacillus Dominant', 'Secretor Status : Lactobacillus Dominant')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+results_table_t1_CST <-
+  Anova(glmm_t1_CST) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'CST', 'Secretor Status : CST')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+```
+# Model estimates - Early
+```{r}
+# Part of Table 1
+ciEstimates_T1 <- confint(glmm_t1)
+
+estimatesTable_table_t1 <- 
+  tibble::as_tibble(ciEstimates_T1) %>% mutate(coefficient=rownames(ciEstimates_T1)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+ciEstimates_T1_CST <- confint(glmm_t1_CST)
+
+estimatesTable_table_t1_cst <- 
+  tibble::as_tibble(ciEstimates_T1_CST) %>% mutate(coefficient=rownames(ciEstimates_T1_CST)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+
+emm1 <- emmeans(glmm_t1, specs = ~SecretorStatus:LactobacillusDominant, type="response")
+emm1_CST <- emmeans(glmm_t1_CST, specs = ~SecretorStatus:CST, type="response")
+
+emm1_ctr <- contrast(emm1, method="pairwise", adjust = "none")
+emm1_ctr_CST <- contrast(emm1_CST, method="pairwise", adjust = "none")
+```
+
+The analysis of deviance results indicate that Previous PTB/MTL, Cerclage, Previous Lletz and the secretor status:Lactobacillus interaction terms are significant covariates. Residual analysis using the Dharma package indicates that the model fits well for each covariate. The coefficients indicate that the non-secretors with a Lactobacillus depleted microbiome have shorter gestational lengths (hence positive relationship with the inverted variable) compared with the baseline (women who are secretors with Lactobacillus dominated microbiomes). Women who have had a previous PTB/MTL also have shorter gestational lengths (compared with women who have not) as do women who get a cervical stitch (cerclage). 
+
+Post hoc comparison using the emmeans package suggests that the most significant comparison is between the non-secretors with Lactobacillus depleted microbiomes and non-secretors with Lactobacillus dominant microbiomes (comparison of secretors that have Lactobacillus depleted microbiomes with non-secretors that also have Lactobacillus deplete microbiomes is close to significance).
+
+Adjustment for Blood Group
+```{r}
+# Fit a similar model with adjustment for ABO blood group
+# Results shown in Table S5
+glmm_t1_abo <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  ABO + SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP1)
+
+
+ciEstimates_T1_abo <- confint(glmm_t1_abo)
+
+estimatesTable_table_t1_abo <- 
+  tibble::as_tibble(ciEstimates_T1_abo) %>% mutate(coefficient=rownames(ciEstimates_T1_abo)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+```
+
+
+## Mid (TP2) Analysis
+```{r}
+FUT2_TP2 <- subset(FUT2Dataset, Timepoint == 2)
+
+# reflectorTransformation 
+FUT2_TP2$LGest <- (max(FUT2_TP2$delivery.gestation_total.days) + 1 ) - FUT2_TP2$`delivery.gestation_total.days`
+FUT2_TP2 <- subset(FUT2_TP2, previous.ptb != 'NA')
+FUT2_TP2$previous.ptb <- factor(FUT2_TP2$previous.ptb)
+# Re-level factor to have non-secretor on model coefs by default
+FUT2_TP2$SecretorStatus <- factor(FUT2_TP2$SecretorStatus, levels=c('Secretor', 'Non-secretor'))
+
+glmm_t2 <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP2)
+
+#Model diagnostics
+simglmmT2 <- simulateResiduals(fittedModel=glmm_t2, plot=T)
+testDispersion(simglmmT2)
+
+#Perform analysis of deviance using the Anova (using Anova from the car package rather than the core anova function as the former automatically takes care of unbalanced designs)
+Anova(glmm_t2)
+summary(glmm_t2)
+
+# Model using CST instead of LDepleted status
+glmm_t2_CST <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz + SecretorStatus + CST + SecretorStatus:CST + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP2)
+
+#Model diagnostics
+simglmmT2 <- simulateResiduals(fittedModel=glmm_t2_CST, plot=T)
+testDispersion(simglmmT2)
+
+#Perform analysis of deviance using the Anova (using Anova from the car package rather than the core anova function as the former automatically takes care of unbalanced designs)
+Anova(glmm_t2_CST)
+summary(glmm_t2_CST)
+
+results_table_t2 <-
+  Anova(glmm_t2) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'Lactobacillus Dominant', 'Secretor Status : Lactobacillus Dominant')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+results_table_t2_CST <-
+  Anova(glmm_t2_CST) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'CST', 'Secretor Status : CST')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+```
+
+## Model coefficients - Mid
+```{r}
+# Part of Table 1
+ciEstimates_T2 <- confint(glmm_t2)
+
+estimatesTable_table_t2 <- 
+  tibble::as_tibble(ciEstimates_T2) %>% mutate(coefficient=rownames(ciEstimates_T2)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+ciEstimates_T2_CST <- confint(glmm_t2_CST)
+
+estimatesTable_table_t2_cst <- 
+  tibble::as_tibble(ciEstimates_T2_CST) %>% mutate(coefficient=rownames(ciEstimates_T2_CST)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+```
+
+Adjustment for Blood Group
+```{r}
+# Fit a similar model with adjustment for ABO blood group
+# Results shown in Table S5
+glmm_t2_abo <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  ABO + SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP2)
+
+ciEstimates_T2_abo <- confint(glmm_t2_abo)
+
+estimatesTable_table_t2_abo <- 
+  tibble::as_tibble(ciEstimates_T2_abo) %>% mutate(coefficient=rownames(ciEstimates_T2_abo)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+```
+
+
+## Late (TP3) Analysis
+```{r}
+FUT2_TP3 <- subset(FUT2Dataset, Timepoint == 3)
+
+# reflectorTransformation 
+FUT2_TP3$LGest <- (max(FUT2_TP3$delivery.gestation_total.days) + 1 ) - FUT2_TP3$`delivery.gestation_total.days`
+FUT2_TP3 <- subset(FUT2_TP3, previous.ptb != 'NA')
+FUT2_TP3$previous.ptb <- factor(FUT2_TP3$previous.ptb)
+# Re-level factor to have non-secretor on model coefs by default
+FUT2_TP3$SecretorStatus <- factor(FUT2_TP3$SecretorStatus, levels=c('Secretor', 'Non-secretor'))
+
+#Run GLMM incoroporating Lactobacillus status at Timepoint 1 and secretor status - Original Model
+glmm_t3 <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP3)
+
+#Model diagnostics
+simglmmT3 <- simulateResiduals(fittedModel=glmm_t3, plot=T)
+testDispersion(simglmmT3)
+
+#Perform analysis of deviance using the Anova (using Anova from the car package rather than the core anova function as the former automatically takes care of unbalanced designs)
+Anova(glmm_t3)
+summary(glmm_t3)
+
+# Model using CST instead of LDepleted status
+glmm_t3_CST <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz + SecretorStatus + CST + SecretorStatus:CST + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP3)
+
+#Model diagnostics
+simglmmT3 <- simulateResiduals(fittedModel=glmm_t3_CST, plot=T)
+testDispersion(simglmmT3)
+
+#Perform analysis of deviance using the Anova (using Anova from the car package rather than the core anova function as the former automatically takes care of unbalanced designs)
+Anova(glmm_t3_CST)
+summary(glmm_t3_CST)
+
+results_table_t3 <-
+  Anova(glmm_t3) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'Lactobacillus Dominant', 'Secretor Status : Lactobacillus Dominant')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+results_table_t3_CST <-
+  Anova(glmm_t3_CST) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'CST', 'Secretor Status : CST')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+```
+## Model coefficients - Late
+```{r}
+# Part of Table 1
+ciEstimates_T3 <- confint(glmm_t3)
+
+estimatesTable_table_t3 <- 
+  tibble::as_tibble(ciEstimates_T3) %>% mutate(coefficient=rownames(ciEstimates_T3)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+ciEstimates_T3_CST <- confint(glmm_t3_CST)
+
+estimatesTable_table_t3_cst <- 
+  tibble::as_tibble(ciEstimates_T3_CST) %>% mutate(coefficient=rownames(ciEstimates_T3_CST)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+```
+
+Adjustment for Blood Group
+```{r}
+# Fit a similar model with adjustment for ABO blood group
+# Results shown in Table S5
+glmm_t3_abo <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  ABO + SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP3)
+
+ciEstimates_T3_abo <- confint(glmm_t3_abo)
+
+estimatesTable_table_t3_abo <- 
+  tibble::as_tibble(ciEstimates_T3_abo) %>% mutate(coefficient=rownames(ciEstimates_T3_abo)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+```
+
+#Perform a simpler GLM (for comparison with the GLMM)
+```{r}
+glm_t1 <- glmmTMB(LGest ~ maternal.age + bmi  + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant, family=Gamma(link="log"), data=FUT2_TP1)
+
+AIC(glm_t1,glmm_t1)
+```
+Comparing the random intercept model with the GLM indicates that the latter is actually a slightly better fit (lower AIC), i.e., ethnicity does not appear to be a major factor (bias towards European women in this cohort may explain lack of signal with respect to ethnicity).
+```{r}
+simglmmT1 <- simulateResiduals(fittedModel=glmm_t1, plot=T)
+testDispersion(simglmmT1)
+emm1 <- emmeans(glmm_t1, specs = ~SecretorStatus:LactobacillusDominant, type="response")
+emm1
+contrast(emm1, method="pairwise", adjust = "none")
+```

@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Import the Primmer trimmed (using cutadapt) sequences into QIIME2
+qiime tools import --type SampleData[PairedEndSequencesWithQuality] --input-path FUT2_QIIME2_manifest_V1V2Samples.txt --output-path ./V1V2_Processing/FUT2-PTrimV1V2.qza --input-format PairedEndFastqManifestPhred33V2
+
+qiime demux summarize --i-data ./V1V2_Processing/FUT2-PTrimV1V2.qza --o-visualization ./V1V2_Processing/FUT2-PTrimV1V2.qzv
+
+# DADA denoised
+qiime dada2 denoise-paired --i-demultiplexed-seqs ./V1V2_Processing/FUT2-PTrimV1V2.qza --p-trim-left-f 0 --p-trunc-len-f 210 --p-trim-left-r 0 --p-trunc-len-r 175 --p-n-threads 10 --p-max-ee-r 2 --o-representative-sequences ./V1V2_Processing/FUT2-PTrimV1V2-rep-seqs-dada2.qza --o-table ./V1V2_Processing/FUT2-PTrimV1V2-table-dada2.qza --o-denoising-stats ./V1V2_Processing/FUT2-PTrimV1V2-stats-dada2.qza
+
+# Generate dada2 stats
+qiime metadata tabulate --m-input-file  ./V1V2_Processing/FUT2-PTrimV1V2-stats-dada2.qza --o-visualization  ./V1V2_Processing/FUT2-PTrimV1V2-stats-dada2.qzv
+
+# Generate dada2 counts
+qiime feature-table summarize --i-table ./V1V2_Processing/FUT2-PTrimV1V2-table-dada2.qza --o-visualization ./V1V2_Processing/FUT2-PTrimV1V2-table-dada2.qzv
+
+# Generate dada 2 ASV seqs
+qiime feature-table tabulate-seqs --i-data ./V1V2_Processing/FUT2-PTrimV1V2-rep-seqs-dada2.qza  --o-visualization ./V1V2_Processing/FUT2-PTrimV1V2-rep-seqs-dada2.qzv
+
+
+# Classify taxonomy using the SILVA Naive Bayes
+qiime feature-classifier classify-sklearn --i-classifier ./qiime2-classifiers/silva-138.1-ssu-nr99-V1V2Proc-classifier.qza --i-reads ./V1V2_Processing/FUT2-PTrimV1V2-rep-seqs-dada2.qza --o-classification ./V1V2_Processing/FUT2-PTrimV1V2-SILVA-Taxonomy.qza
+
+qiime metadata tabulate --m-input-file ./V1V2_Processing/FUT2-PTrimV1V2-SILVA-Taxonomy.qza --o-visualization ./V1V2_Processing/FUT2-PTrimV1V2-SILVA-Taxonomy.qzv
+
+qiime krona collapse-and-plot --i-table ./V1V2_Processing/FUT2-PTrimV1V2-table-dada2.qza --i-taxonomy ./V1V2_Processing/FUT2-PTrimV1V2-SILVA-Taxonomy.qza --o-krona-plot ./V1V2_Processing/FUT2-PTrimV1V2-SILVA-Taxonomy.qzv
+
+
+qiime tools export --input-path ./V1V2_Processing/FUT2-PTrimV1V2-table-dada2.qza --output-path ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/
+
+biom convert -i ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/feature-table.biom -o ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/table.tsv --to-tsv
+
+
+# Export Species level
+qiime taxa collapse --i-table ./V1V2_Processing/FUT2-PTrimV1V2-table-dada2.qza --i-taxonomy ./V1V2_Processing/FUT2-PTrimV1V2-SILVA-Taxonomy.qza --p-level 7 --o-collapsed-table ./V1V2_Processing/FUT2-PTrimV1V2-table-species.qza
+
+qiime tools export --input-path  ./V1V2_Processing/FUT2-PTrimV1V2-table-species.qza --output-path ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/Species/
+
+biom convert -i ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/Species/feature-table.biom -o ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/Species/table.tsv --to-tsv
+
+
+# Export Genera level
+qiime taxa collapse --i-table ./V1V2_Processing/FUT2-PTrimV1V2-table-dada2.qza --i-taxonomy ./V1V2_Processing/FUT2-PTrimV1V2-SILVA-Taxonomy.qza --p-level 6 --o-collapsed-table ./V1V2_Processing/FUT2-PTrimV1V2-table-genera.qza
+
+qiime tools export --input-path ./V1V2_Processing/FUT2-PTrimV1V2-table-genera.qza --output-path ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/Genera/
+
+biom convert -i ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/Genera/feature-table.biom -o ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/Genera/table.tsv --to-tsv
+
+
+# VALENCIA
+python convert_qiime.py -i ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/table.tsv -t ./V1V2_Processing/FUT2-ASV-Outputs-SILVA/taxonomy.tsv --ref ./CST_centroids_012920.csv
+
+python Valencia.py -i ./taxon_table_asv_merged.csv -r ./CST_centroids_012920.csv -p ./VALENCIA_V1V2 -o ./VALENCIA_V1V2
+
+

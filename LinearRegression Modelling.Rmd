@@ -81,12 +81,28 @@ library(patchwork)
 
 FUT2Dataset <- readxl::read_excel('./Data//FUT2-Dataset.xlsx', sheet='Clinical Data')
 
+FUT2Dataset_Species <- readxl::read_excel('./Data//FUT2-Dataset.xlsx', sheet='Species Level Dataset')
+
+# Remove 2 samples with very low counts to known species
+FUT2Dataset <- subset(FUT2Dataset, !SampleID %in% c('T1A22'))
+FUT2Dataset_Species <- subset(FUT2Dataset_Species, !SampleID %in% c('T1A22'))
+
 colnames(FUT2Dataset)[colnames(FUT2Dataset) == 'Secretor Status'] <- "SecretorStatus"
 FUT2Dataset$bmi <- as.numeric(FUT2Dataset$bmi)
 FUT2Dataset$maternal.age <- as.numeric(FUT2Dataset$maternal.age)
 FUT2Dataset$ABO <- factor(FUT2Dataset$ABO, levels=c('A', 'AB', 'B', 'O'))
 FUT2Dataset$CST[grepl('IV', FUT2Dataset$CST)] <- 'IV'
 FUT2Dataset$CST <- factor(FUT2Dataset$CST, levels=c('I', 'II', 'III', 'IV', 'V'))
+
+predominantTaxa <- colnames(FUT2Dataset_Species[, 2:ncol(FUT2Dataset_Species)])[apply(FUT2Dataset_Species[, 2:ncol(FUT2Dataset_Species)], 1, FUN=function(x) { which.max(x)})]
+
+FUT2Dataset$LactobacillusDominant_CST <- 'L. Dominant'
+FUT2Dataset$LactobacillusDominant_CST[grepl('IV', FUT2Dataset$CST)] <- 'L. Depleted'
+FUT2Dataset$LactobacillusDominant_CST[FUT2Dataset$subCST == 'IV-C3'] <- 'L. Dominant'
+FUT2Dataset$LactobacillusDominant_CST[predominantTaxa %in% c('Lactobacillus', 'Lactobacillus delbrueckii', 'Bifidobacterium longum', 'Bifidobacterium breve', 
+                                                             'Lactobacillus acidophilus', 'Lactobacillus rhamnosus', 'Limosilactobacillus')] <- 'L. Dominant'
+FUT2Dataset$LactobacillusDominant_CST[predominantTaxa %in% c('Gardnerella uncultured bacterium', 'Gardnerella')] <- 'L. Depleted'
+
 FUT2Dataset$LactobacillusDominant <- factor(FUT2Dataset$LactobacillusDominant, levels=c('L. Dominant', 'L. Depleted'))
 FUT2Dataset$LactobacillusDominant_CST <- factor(FUT2Dataset$LactobacillusDominant_CST, levels=c('L. Dominant', 'L. Depleted'))
 ```
@@ -96,23 +112,115 @@ FUT2Dataset$LactobacillusDominant_CST <- factor(FUT2Dataset$LactobacillusDominan
 ```{r}
 CustomColours <- c('I'='forestgreen', 'II'='steelblue3', 'III'='darkorange3', 'IV'='firebrick3', 'V'='turquoise4')
 
-SecretorGestAge_1_CST <- ggplot(subset(FUT2Dataset, Timepoint == 1), aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=14), axis.title.y=element_text(size=14)) + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab('Gestational length (days)') + ylim(c(140, 294)) 
+# Timepoint 1 CST
+plot_data_T1_CST <- subset(FUT2Dataset, Timepoint == 1) %>%
+  mutate(group = interaction(SecretorStatus, CST, sep = "_"))
+
+sample_sizes_T1_CST <- plot_data_T1_CST %>%
+  group_by(SecretorStatus, CST) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0(n))
 
 
-SecretorGestAge_2_CST <- ggplot(subset(FUT2Dataset, Timepoint == 2), aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14))  + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL) + ylim(c(140, 294))
+SecretorGestAge_1_CST <- ggplot(plot_data_T1_CST, aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + 
+  geom_jitter(position=position_jitterdodge()) + scale_fill_manual(values=CustomColours) + 
+  geom_text(data = sample_sizes_T1_CST, aes(x = SecretorStatus, y = 140, label = label, group = CST), 
+            position = position_dodge(width = 0.75), vjust = 1.5,  size = 5) + theme_light() + 
+  theme(legend.title = element_text(size=16),legend.text = element_text(size=15), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 18), axis.title.x=element_text(size=18), axis.title.y=element_text(size=18)) + 
+  xlab(NULL) + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab('Gestational length (days)') + ylim(c(140, 294)) 
 
-SecretorGestAge_3_CST <- ggplot(subset(FUT2Dataset, Timepoint == 3), aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=14), axis.title.y=element_text(size=14))  + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL) + ylim(c(140, 294)) + ylab(NULL) 
+# Timepoint 2 CST
+plot_data_T2_CST <- subset(FUT2Dataset, Timepoint == 2) %>%
+  mutate(group = interaction(SecretorStatus, CST, sep = "_"))
 
+sample_sizes_T2_CST <- plot_data_T2_CST %>%
+  group_by(SecretorStatus, CST) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0(n))
+
+SecretorGestAge_2_CST <- ggplot(plot_data_T2_CST, aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + 
+  geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) +
+  geom_text(data = sample_sizes_T2_CST, aes(x = SecretorStatus, y = 140, label = label, group = CST), 
+            position = position_dodge(width = 0.75), vjust = 1.5,  size = 5) + theme_light() + 
+   theme(legend.title = element_text(size=16),legend.text = element_text(size=15), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 18), axis.title.x=element_text(size=18), axis.title.y=element_text(size=18))  + 
+  xlab(NULL) + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL) + ylim(c(140, 294)) 
+
+# Timepoint 3 CST
+plot_data_T3_CST <- subset(FUT2Dataset, Timepoint == 3) %>%
+  mutate(group = interaction(SecretorStatus, CST, sep = "_"))
+
+sample_sizes_T3_CST <- plot_data_T3_CST %>%
+  group_by(SecretorStatus, CST) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0(n))
+
+SecretorGestAge_3_CST <- ggplot(plot_data_T3_CST, aes(x=SecretorStatus, fill=CST, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) +
+  geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours) + 
+    geom_text(data = sample_sizes_T3_CST, aes(x = SecretorStatus, y = 140, label = label, group = CST), 
+            position = position_dodge(width = 0.75), vjust = 1.5,  size = 5) + theme_light() + 
+   theme(legend.title = element_text(size=16),legend.text = element_text(size=15), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 18), axis.title.x=element_text(size=18), axis.title.y=element_text(size=18))   + 
+  xlab(NULL)  + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL) + ylim(c(140, 294)) + ylab(NULL) 
+
+
+# Lactobacillus dominant plots
 CustomColours_LDom <- c('L. Dominant'='forestgreen', 'L. Depleted'='firebrick3')
 
-SecretorGestAge_1_LDom <- ggplot(subset(FUT2Dataset, Timepoint == 1), aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14))   + theme(axis.text.x = element_text(angle = 0,  size = 14)) + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab('Gestational length (days)') + guides(fill=guide_legend(title="*Lactobacillus* status"))   +
-  theme(legend.title = element_markdown()) + ylim(c(140, 294))
+# Timepoint 1 LDom vs LDepl
+plot_data_T1 <- subset(FUT2Dataset, Timepoint == 1) %>%
+  mutate(group = interaction(SecretorStatus, LactobacillusDominant, sep = "_"))
 
-SecretorGestAge_2_LDom <- ggplot(subset(FUT2Dataset, Timepoint == 2), aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14)) + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL)  + guides(fill=guide_legend(title="*Lactobacillus* status"))   +  
-  theme(legend.title = element_markdown()) + ylim(c(140, 294))
+sample_sizes_T1 <- plot_data_T1 %>%
+  group_by(SecretorStatus, LactobacillusDominant) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0(n))
 
-SecretorGestAge_3_LDom <- ggplot(subset(FUT2Dataset, Timepoint == 3), aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + theme(legend.title = element_text(size=12), axis.text.x = element_text(size = 12), axis.title.x=element_text(size=12), axis.title.y=element_text(size=14))  + xlab(NULL) + theme_light() + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab(NULL)  + guides(fill=guide_legend(title="*Lactobacillus* status"))   + 
-  theme(legend.title = element_markdown()) + ylim(c(140, 294))
+SecretorGestAge_1_LDom <- ggplot(plot_data_T1, aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + 
+  geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + 
+  geom_text(data = sample_sizes_T1, aes(x = SecretorStatus, y = 140, label = label, group = LactobacillusDominant), 
+            position = position_dodge(width = 0.75), vjust = 1.5,  size = 5) + theme_light() + 
+   theme(legend.title = element_text(size=16),legend.text = element_text(size=15), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 18), axis.title.x=element_text(size=18), axis.title.y=element_text(size=18))  + 
+  xlab(NULL)  + 
+  geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + ylab('Gestational length (days)') + 
+  guides(fill=guide_legend(title="*Lactobacillus* status"))   +
+  theme(legend.title = element_markdown()) + ylim(c(140, 294))  + ggtitle('Early') + theme(plot.title = element_text(hjust = 0.5, size = 30, face = "plain"))  
+
+# Timepoint 2 LDom vs LDepl
+plot_data_T2 <- subset(FUT2Dataset, Timepoint == 2) %>%
+  mutate(group = interaction(SecretorStatus, LactobacillusDominant, sep = "_"))
+
+sample_sizes_T2 <- plot_data_T2 %>%
+  group_by(SecretorStatus, LactobacillusDominant) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0(n))
+
+SecretorGestAge_2_LDom <- ggplot(plot_data_T2, aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + 
+  geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + 
+   geom_text(data = sample_sizes_T2, aes(x = SecretorStatus, y = 140, label = label, group = LactobacillusDominant), 
+            position = position_dodge(width = 0.75), vjust = 1.5,  size = 5) + theme_light() + 
+   theme(legend.title = element_text(size=16),legend.text = element_text(size=15), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 18), axis.title.x=element_text(size=18), axis.title.y=element_text(size=18)) + 
+  xlab(NULL) + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + 
+  ylab(NULL) + guides(fill=guide_legend(title="*Lactobacillus* status")) +  
+  theme(legend.title = element_markdown()) + ylim(c(140, 294))  + ggtitle('Mid') +
+    theme(plot.title = element_text(hjust = 0.5, size = 30, face = "plain"))
+
+# Timepoint 3 LDom vs LDepl
+plot_data_T3 <- subset(FUT2Dataset, Timepoint == 3) %>%
+  mutate(group = interaction(SecretorStatus, LactobacillusDominant, sep = "_"))
+
+sample_sizes_T3 <- plot_data_T3 %>%
+  group_by(SecretorStatus, LactobacillusDominant) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(label = paste0(n))
+
+SecretorGestAge_3_LDom <- ggplot(plot_data_T3, aes(x=SecretorStatus, fill=LactobacillusDominant, y=delivery.gestation_total.days)) + geom_boxplot(alpha=0.8, outlier.shape = NA) + 
+  geom_jitter(position=position_jitterdodge()) +  scale_fill_manual(values=CustomColours_LDom) + 
+  geom_text(data = sample_sizes_T3, aes(x = SecretorStatus, y = 140, label = label, group = LactobacillusDominant), 
+            position = position_dodge(width = 0.75), vjust = 1.5,  size = 5) +  theme_light() + 
+   theme(legend.title = element_text(size=16),legend.text = element_text(size=15), axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 18), axis.title.x=element_text(size=18), axis.title.y=element_text(size=18))  + 
+  xlab(NULL) + geom_hline(aes(yintercept=37*7), linetype='dashed', col='firebrick4') + 
+  ylab(NULL)  + guides(fill=guide_legend(title="*Lactobacillus* status")) + 
+  theme(legend.title = element_markdown()) + ylim(c(140, 294))  + ggtitle('Late') +
+    theme(plot.title = element_text(hjust = 0.5, size = 30, face = "plain"))
 
 Figure3_LD <- (SecretorGestAge_1_LDom | SecretorGestAge_2_LDom | SecretorGestAge_3_LDom)
 Figure3_CST <- (SecretorGestAge_1_CST | SecretorGestAge_2_CST | SecretorGestAge_3_CST)
@@ -122,25 +230,30 @@ Figure3_LD <- Figure3_LD + plot_layout(guides='collect')
 
 Figure3 <- (Figure3_LD / Figure3_CST)  & theme(legend.justification = "left")
 Figure3 <- Figure3  + plot_annotation(tag_levels=list(c('A', '', '', 'B', '', ''))) 
-Figue3 <- Figure3 & theme(plot.tag = element_text(size=25))
+Figure3 <- Figure3 & theme(plot.tag = element_text(size=25))
 
-ggsave(here::here('Figures', 'Figure3.png'), dpi=300, width=12, height=10)
-ggsave(here::here('Figures', 'Figure3.svg'), dpi=300, width=12, height=10)
-
+ggsave(here::here('Figures', 'Figure3.png'), dpi=300, width=18, height=20)
+ggsave(here::here('Figures', 'Figure3.svg'), dpi=300, width=18, height=20)
 ```
 
-## Table S1 
+## Table S1
 ```{r}
 MetadataFrame_PerPregnancy <- subset(FUT2Dataset, !duplicated(SubjectID))
 MetadataFrame_PerPregnancy$BMICat <- cut(MetadataFrame_PerPregnancy$bmi, 
                    breaks=c(-Inf, 18.5, 24.99, 29.99, Inf), 
                    labels=c("<18.5","18.5 - 24.99","25-29.99", ">30"))
+
+MetadataFrame_PerPregnancy$OutcomeCat <- cut(MetadataFrame_PerPregnancy$delivery.gestation_total.days, 
+                   breaks=c(-Inf, 196, 224, 259, Inf), 
+                   labels=c("Extreme Preterm","Very Preterm", "Moderate to late Preterm", "Term"), right=FALSE)
+
+
 MetadataFrame_PerPregnancy$cerclage <- factor(MetadataFrame_PerPregnancy$cerclage)
 MetadataFrame_PerPregnancy$lletz <- factor(MetadataFrame_PerPregnancy$lletz)
 
 MetadataFrame_PerPregnancy$Outcome <- MetadataFrame_PerPregnancy$delivery.gestation_total.days < 259
 
-MetadataFrame_Summary <- MetadataFrame_PerPregnancy %>% dplyr::select(delivery.gestation_total.days, Outcome, maternal.age, SecretorStatus, BMICat, ethnicity.simplified, lletz, cerclage, previous.ptb)
+MetadataFrame_Summary <- MetadataFrame_PerPregnancy %>% dplyr::select(delivery.gestation_total.days, OutcomeCat, maternal.age, SecretorStatus, BMICat, ethnicity.simplified, lletz, cerclage, previous.ptb)
 
 MetadataFrame_Summary$ethnicity.simplified[MetadataFrame_Summary$ethnicity.simplified == 'Mixed black/white'] <- 'Mixed/Other'
 MetadataFrame_Summary$ethnicity.simplified[MetadataFrame_Summary$ethnicity.simplified == 'Mixed'] <- 'Mixed/Other'
@@ -150,11 +263,45 @@ MetadataFrame_Summary$ethnicity.simplified[MetadataFrame_Summary$ethnicity.simpl
 
 summaryTable_S1 <- tbl_summary(MetadataFrame_Summary, by=c(`SecretorStatus`), statistic = all_continuous() ~ "{mean} ({sd})") 
 # %>% modify_header(label = '**Outcome**') %>% add_p(pvalue_fun = function(x) style_pvalue(x, digits = 3))
-
-t1_summary <- summary(subset(FUT2Dataset, Timepoint == 1)[, "sampling.gestation_total.days"])
-t2_summary <- summary(subset(FUT2Dataset, Timepoint == 2)[, "sampling.gestation_total.days"])
-t3_summary <- summary(subset(FUT2Dataset, Timepoint == 3)[, "sampling.gestation_total.days"])
 ```
+
+```{r}
+Timepoint_Distribution <- ggplot(FUT2Dataset, aes(x=sampling.gestation_total.days, fill=factor(Timepoint))) + geom_histogram() + geom_vline(xintercept = 133.0, linetype='dashed') +
+  geom_vline(xintercept = 178.0, linetype='dashed')  + xlab('Gestational age at sampling (days)') + theme_light() + scale_fill_discrete(name='Time point', labels=c('1 - Early', '2 - Mid', '3 - Late'))
+
+SamplesPerPatient <- FUT2Dataset %>% group_by(SubjectID) %>% mutate(n=n()) %>% select(n, SubjectID, SecretorStatus)  %>% distinct(SubjectID, .keep_all = TRUE) 
+
+table(SamplesPerPatient$n, SamplesPerPatient$SecretorStatus)
+```
+# CST distribution per timepoint
+```{r}
+TP1 <- subset(FUT2Dataset, Timepoint == 1)
+TP2 <- subset(FUT2Dataset, Timepoint == 2)
+TP3 <- subset(FUT2Dataset, Timepoint == 3)
+
+table(TP1$CST)/dim(TP1)[1]
+table(TP2$CST)/dim(TP2)[1]
+table(TP3$CST)/dim(TP3)[1]
+```
+
+# Distribution of outcome at each timepoint
+```{r}
+MetadataFrame_OutcomeTimepoint <-FUT2Dataset
+
+MetadataFrame_OutcomeTimepoint$OutcomeCat <- cut(MetadataFrame_OutcomeTimepoint$delivery.gestation_total.days, 
+                   breaks=c(-Inf, 196, 224, 259, Inf), 
+                   labels=c("Extreme Preterm","Very Preterm", "Moderate to late Preterm", "Term"), right=FALSE)
+
+MetadataFrame_Summary <- MetadataFrame_OutcomeTimepoint %>% dplyr::select(OutcomeCat, SecretorStatus, Timepoint)
+
+# colnames(MetadataFrame_Summary) <- c('Secretor Status', 'Lactobacillus Dominant', 'CST')
+
+summaryTable_TimepointOutcome <-  MetadataFrame_Summary %>% tbl_strata(
+    strata = SecretorStatus,
+    ~.x %>%  tbl_summary(
+        by = Timepoint))
+```
+
 
 ## Genotype statistics
 ```{r}
@@ -174,9 +321,7 @@ sum(heterozygous$W143X =='W|X')/nrow(heterozygous) * 100
 table(genotypes$I129F, genotypes$ethnicity.simplified)
 table(genotypes$P101L, genotypes$ethnicity.simplified)
 table(genotypes$W143X, genotypes$ethnicity.simplified)
-
 ```
-
 
 ## Info used for table S2
 ```{r}
@@ -192,6 +337,22 @@ countsT2_CST <- subset(FUT2Dataset, Timepoint == 2) %>% select(delivery.gestatio
 
 countsT3_CST <- subset(FUT2Dataset, Timepoint == 3) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, CST) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', n(), ')')) %>% gt()
 ```
+# Descriptive statistics and comparisons of delivery gestation
+```{r}
+Table_Mean_SD_Ldom <- subset(FUT2Dataset, Timepoint == 1) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, LactobacillusDominant) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', sd(delivery.gestation_total.days), ')')) %>% gt()
+
+# Get the tukey adjusted p-values for the sub-comparisons
+pvalues_TP1_LDominant <- pairs(emmeans(lm(formula = delivery.gestation_total.days ~ 1 + LactobacillusDominant*SecretorStatus, data=FUT2_TP1), specs=~LactobacillusDominant*SecretorStatus))
+
+Table_Mean_SD_CST <- subset(FUT2Dataset, Timepoint == 1) %>% select(delivery.gestation_total.days, SecretorStatus, LactobacillusDominant, CST) %>% group_by(SecretorStatus, CST) %>% summarise(values = paste0(format(mean(delivery.gestation_total.days), nsmall=2), ' (', sd(delivery.gestation_total.days), ')')) %>% gt()
+
+pvalues_TP1_CST <- pairs(emmeans(lm(formula = delivery.gestation_total.days ~ 1 + CST*SecretorStatus, data=FUT2_TP1), specs=~CST*SecretorStatus))
+
+pvalues_TP1_CST_Noadj <- pairs(emmeans(lm(formula = delivery.gestation_total.days ~ 1 + CST*SecretorStatus, data=FUT2_TP1), specs=~CST*SecretorStatus), adjust='none')
+
+
+```
+
 
 # Regression Analysis
 ## Early (TP1) Analysis
@@ -283,7 +444,7 @@ Post hoc comparison using the emmeans package suggests that the most significant
 Adjustment for Blood Group
 ```{r}
 # Fit a similar model with adjustment for ABO blood group
-# Results shown in Table S5
+# Results shown in Table S6
 glmm_t1_abo <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  ABO + SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2_TP1)
 
 
@@ -487,4 +648,157 @@ testDispersion(simglmmT1)
 emm1 <- emmeans(glmm_t1, specs = ~SecretorStatus:LactobacillusDominant, type="response")
 emm1
 contrast(emm1, method="pairwise", adjust = "none")
+```
+
+# Sensitivity analysis of Timepoint 1 results for Lactobacillus dominant vs Depleted and secretor status
+```{r, warning=F}
+FUT2Dataset_Genera <- readxl::read_excel('./Data//FUT2-Dataset.xlsx', sheet='Genera Level Dataset')
+FUT2Dataset_Genera <- merge(FUT2Dataset, FUT2Dataset_Genera, by='SampleID')
+
+FUT2Dataset_Genera_TP1 <- subset(FUT2Dataset_Genera, Timepoint == 1)
+
+# reflectorTransformation 
+# FUT2_TP1$LGest <- FUT2_TP1$delivery.gestation_total.days
+FUT2Dataset_Genera_TP1$LGest <- (max(FUT2Dataset_Genera_TP1$delivery.gestation_total.days) + 1) - FUT2Dataset_Genera_TP1$`delivery.gestation_total.days`
+FUT2Dataset_Genera_TP1 <- subset(FUT2Dataset_Genera_TP1, previous.ptb != 'NA')
+FUT2Dataset_Genera_TP1$previous.ptb <- factor(FUT2Dataset_Genera_TP1$previous.ptb)
+# Re-level factor to have non-secretor on model coefs by default
+FUT2Dataset_Genera_TP1$SecretorStatus <- factor(FUT2Dataset_Genera_TP1$SecretorStatus, levels=c('Secretor', 'Non-secretor'))
+
+glmm_t1_9 <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2Dataset_Genera_TP1)
+
+#Run GLMM incoroporating Lactobacillus status at Timepoint 1 and secretor status - Original Model
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus < 0.75] <- 'L. Depleted'
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus > 0.75] <- 'L. Dominant'
+
+glmm_t1_75 <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2Dataset_Genera_TP1)
+
+Anova(glmm_t1_75)
+summary(glmm_t1_75)
+
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus < 0.5] <- 'L. Depleted'
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus > 0.5] <- 'L. Dominant'
+
+glmm_t1_50 <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2Dataset_Genera_TP1)
+
+Anova(glmm_t1_50)
+summary(glmm_t1_50)
+
+
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus < 0.9] <- 'L. Depleted'
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus > 0.9] <- 'L. Dominant'
+
+pvals <- c()
+
+thresholds <- seq(0.9, 0.25, -0.02)
+
+for (threshold in thresholds) {
+
+  
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus < threshold] <- 'L. Depleted'
+FUT2Dataset_Genera_TP1$LactobacillusDominant[FUT2Dataset_Genera_TP1$Lactobacillus > threshold] <- 'L. Dominant'
+
+glmm_t1_sens <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant + SecretorStatus:LactobacillusDominant + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2Dataset_Genera_TP1)
+
+AnovaTable <- Anova(glmm_t1_sens)
+pvals <- c(pvals, AnovaTable$`Pr(>Chisq)`[8])
+}
+
+sensResults <- data.frame(cbind(LDomvsLDeplThreshold=thresholds, pvalue=pvals))
+
+sensitivityAnalysisPlot <- ggplot(sensResults, aes(x=LDomvsLDeplThreshold, y=pvalue)) + geom_line(color='steelblue4', size=0.5) + geom_point(color='steelblue4', size=2) + theme_light() + geom_hline(yintercept=0.05, linetype='dashed', color='firebrick4') + ylab('*Lactobacillus* Dominant x Secretor Status Interaction p-value') + 
+  xlab("*Lactobacillus* relative abundance threshold") +
+  theme(axis.title.x = element_markdown(),axis.title.y = element_markdown())
+
+# ggsave(here::here('Figures', 'LactoDomvsDeplSensitivityAnalysis.png'), sensitivityAnalysisPlot, dpi=300, width=8, height=8)
+
+```
+```{r}
+FUT2Dataset_Genera <- readxl::read_excel('./Data//FUT2-Dataset.xlsx', sheet='Genera Level Dataset')
+FUT2Dataset_Genera <- merge(FUT2Dataset, FUT2Dataset_Genera, by='SampleID')
+
+FUT2Dataset_Genera_TP1 <- subset(FUT2Dataset_Genera, Timepoint == 1)
+
+# reflectorTransformation 
+# FUT2_TP1$LGest <- FUT2_TP1$delivery.gestation_total.days
+FUT2Dataset_Genera_TP1$LGest <- (max(FUT2Dataset_Genera_TP1$delivery.gestation_total.days) + 1) - FUT2Dataset_Genera_TP1$`delivery.gestation_total.days`
+FUT2Dataset_Genera_TP1 <- subset(FUT2Dataset_Genera_TP1, previous.ptb != 'NA')
+FUT2Dataset_Genera_TP1$previous.ptb <- factor(FUT2Dataset_Genera_TP1$previous.ptb)
+# Re-level factor to have non-secretor on model coefs by default
+FUT2Dataset_Genera_TP1$SecretorStatus <- factor(FUT2Dataset_Genera_TP1$SecretorStatus, levels=c('Secretor', 'Non-secretor'))
+
+
+glmm_t1_LactoRel <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + Lactobacillus + SecretorStatus:Lactobacillus + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2Dataset_Genera_TP1)
+
+Anova(glmm_t1_LactoRel)
+
+results_table_t1_LactoRel <-
+  Anova(glmm_t1_LactoRel) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'Lactobacillus', 'Secretor Status : Lactobacillus')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+glmm_t1_LDomCST <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant_CST + SecretorStatus:LactobacillusDominant_CST + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2Dataset_Genera_TP1)
+
+Anova(glmm_t1_LDomCST)
+
+results_table_t1_LDomCST <-
+  Anova(glmm_t1_LDomCST) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'Lactobacillus Dominant', 'Secretor Status : Lactobacillus Dominant')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+# Use Ldepl = IV, without accounting for VALENCIA pooling other Lacto and B. breve as part of IV
+FUT2Dataset_Genera_TP1$LactobacillusDominant_CST <- 'L. Dominant'
+FUT2Dataset_Genera_TP1$LactobacillusDominant_CST[grepl('IV', FUT2Dataset_Genera_TP1$CST)] <- 'L. Depleted'
+FUT2Dataset_Genera_TP1$LactobacillusDominant_CST <- factor(FUT2Dataset_Genera_TP1$LactobacillusDominant_CST, levels=c('L. Dominant', 'L. Depleted'))
+
+glmm_t1_LDomCST_IvsIVClassic <- glmmTMB(LGest ~ maternal.age + bmi + previous.ptb + cerclage + lletz +  SecretorStatus + LactobacillusDominant_CST + SecretorStatus:LactobacillusDominant_CST + (1|ethnicity.simplified), family=Gamma(link="log"), data=FUT2Dataset_Genera_TP1)
+
+Anova(glmm_t1_LDomCST_IvsIVClassic)
+
+results_table_t1_LDomCST_IvsIVClassic <-
+  Anova(glmm_t1_LDomCST_IvsIVClassic) %>% magrittr::set_rownames(c('Maternal age', 'BMI', "Previous PTB", 'Cervical cerclage', 'Previous cervical excisional treatment', 'Secretor Status', 'Lactobacillus Dominant', 'Secretor Status : Lactobacillus Dominant')) %>% 
+  gt(rownames_to_stub = T) %>%
+  fmt_number( columns = c(2),
+    decimals = 3,
+    suffixing = F)  %>% 
+  fmt_scientific( columns = c(4),
+    decimals = 3) 
+
+```
+
+```{r}
+ciEstimates_T1_RelAbundance <- confint(glmm_t1_LactoRel)
+
+estimatesTable_table_t1_RelAbundance <- 
+  tibble::as_tibble(ciEstimates_T1_RelAbundance) %>% mutate(coefficient=rownames(ciEstimates_T1_RelAbundance)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+ciEstimates_T1_LDomCST <- confint(glmm_t1_LDomCST)
+
+estimatesTable_table_t1_LDomCST <- 
+  tibble::as_tibble(ciEstimates_T1_LDomCST) %>% mutate(coefficient=rownames(ciEstimates_T1_LDomCST)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+
+ciEstimates_T1_LDomCST_IvsIVClassic <- confint(glmm_t1_LDomCST_IvsIVClassic)
+
+estimatesTable_table_t1_LDomCST_IvsIVClassic <- 
+  tibble::as_tibble(ciEstimates_T1_LDomCST_IvsIVClassic) %>% mutate(coefficient=rownames(ciEstimates_T1_LDomCST_IvsIVClassic)) %>% gt(rowname_col = 'coefficient') %>%
+  fmt_number(columns = c(1, 2, 3),
+    decimals = 3,
+    suffixing = F) 
+
+
 ```
